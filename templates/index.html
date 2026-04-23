@@ -3,118 +3,346 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lead Scout</title>
+    <title>Swaytrix — Lead Scout</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
-        .header { background: #1a1a2e; padding: 24px 32px; border-bottom: 1px solid #2a2a4a; }
-        .header h1 { font-size: 28px; color: #7c6af7; font-weight: 700; }
-        .header p { color: #888; margin-top: 4px; }
-        .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
-        .search-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 28px; margin-bottom: 32px; }
-        .search-card h2 { font-size: 18px; margin-bottom: 20px; color: #ccc; }
-        .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-        .form-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
-        label { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-        input, select { background: #111; border: 1px solid #333; color: #e0e0e0; padding: 10px 14px; border-radius: 8px; font-size: 15px; outline: none; }
-        input:focus { border-color: #7c6af7; }
-        .btn { padding: 10px 24px; border-radius: 8px; border: none; cursor: pointer; font-size: 15px; font-weight: 600; transition: all 0.2s; }
-        .btn-primary { background: #7c6af7; color: white; }
-        .btn-primary:hover { background: #6a58e0; }
-        .btn-secondary { background: #2a2a2a; color: #ccc; border: 1px solid #333; }
-        .btn-secondary:hover { background: #333; }
-        .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-        .results-header h2 { color: #ccc; font-size: 18px; }
-        .lead-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; margin-bottom: 16px; transition: border-color 0.2s; }
-        .lead-card:hover { border-color: #7c6af7; }
-        .lead-name { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 4px; }
-        .lead-url { color: #7c6af7; font-size: 13px; margin-bottom: 16px; text-decoration: none; }
-        .lead-url:hover { text-decoration: underline; }
-        .lead-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-        .lead-field { background: #111; border-radius: 8px; padding: 12px; }
-        .field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-bottom: 4px; }
-        .field-value { font-size: 14px; color: #ddd; }
-        .ai-service-badge { display: inline-block; background: #7c6af720; border: 1px solid #7c6af750; color: #a89cf7; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
-        .pitch-box { background: #111; border-left: 3px solid #7c6af7; border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 14px; color: #ccc; line-height: 1.6; }
-        .loading { text-align: center; padding: 60px; color: #666; display: none; }
-        .spinner { width: 40px; height: 40px; border: 3px solid #333; border-top-color: #7c6af7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f5ff; color: #0f1f5c; min-height: 100vh; }
+
+        /* ── HEADER ── */
+        .header {
+            background: linear-gradient(135deg, #0f1f5c 0%, #1a56db 100%);
+            padding: 0 40px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 16px rgba(26,86,219,0.3);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .logo { font-size: 22px; font-weight: 900; color: #fff; letter-spacing: -0.5px; }
+        .logo span { color: #60a5fa; }
+        .logo-tag { background: #ffffff20; color: #93c5fd; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; letter-spacing: 1px; text-transform: uppercase; }
+        .header-right { display: flex; align-items: center; gap: 16px; }
+        .header-user { color: #93c5fd; font-size: 13px; }
+        .btn-logout { background: transparent; border: 1px solid #ffffff40; color: #fff; padding: 6px 16px; border-radius: 8px; font-size: 13px; cursor: pointer; text-decoration: none; }
+        .btn-logout:hover { background: #ffffff15; }
+
+        /* ── LAYOUT ── */
+        .page { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+
+        /* ── SEARCH SECTION ── */
+        .search-section {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 28px;
+            border: 1px solid #dbeafe;
+            box-shadow: 0 2px 12px #1a56db10;
+        }
+        .section-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: #1a56db;
+            margin-bottom: 6px;
+        }
+        .section-title { font-size: 22px; font-weight: 800; color: #0f1f5c; margin-bottom: 4px; }
+        .section-desc { font-size: 14px; color: #6b7280; margin-bottom: 24px; }
+        .search-form { display: flex; gap: 12px; align-items: stretch; }
+        .search-input-wrap { position: relative; flex: 1; }
+        .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #93c5fd; font-size: 18px; }
+        .search-input {
+            width: 100%;
+            background: #f8faff;
+            border: 1.5px solid #dbeafe;
+            color: #0f1f5c;
+            padding: 13px 16px 13px 42px;
+            border-radius: 10px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .search-input:focus { border-color: #1a56db; box-shadow: 0 0 0 4px #dbeafe; }
+        .btn-search {
+            background: linear-gradient(135deg, #1a56db, #2563eb);
+            color: white;
+            border: none;
+            padding: 13px 32px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: opacity 0.2s;
+        }
+        .btn-search:hover { opacity: 0.9; }
+        .search-hint { font-size: 12px; color: #9ca3af; margin-top: 10px; }
+
+        /* ── STATS BAR ── */
+        .stats-bar {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: white;
+            border: 1px solid #dbeafe;
+            border-radius: 12px;
+            padding: 16px 24px;
+            flex: 1;
+            text-align: center;
+            box-shadow: 0 1px 4px #1a56db08;
+        }
+        .stat-num { font-size: 28px; font-weight: 800; color: #1a56db; }
+        .stat-label { font-size: 12px; color: #6b7280; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        /* ── RESULTS SECTION ── */
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .results-title { font-size: 18px; font-weight: 700; color: #0f1f5c; }
+        .results-sub { font-size: 13px; color: #6b7280; margin-top: 2px; }
+        .btn-download {
+            background: white;
+            color: #1a56db;
+            border: 1.5px solid #1a56db;
+            padding: 9px 20px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-download:hover { background: #f0f6ff; }
+
+        /* ── LEAD CARD ── */
+        .lead-card {
+            background: white;
+            border: 1px solid #dbeafe;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px #1a56db08;
+            transition: box-shadow 0.2s, border-color 0.2s;
+        }
+        .lead-card:hover { box-shadow: 0 4px 24px #1a56db18; border-color: #93c5fd; }
+
+        .lead-card-header {
+            background: linear-gradient(135deg, #0f1f5c, #1a56db);
+            padding: 18px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .lead-name { font-size: 17px; font-weight: 700; color: #fff; }
+        .lead-url { color: #93c5fd; font-size: 12px; text-decoration: none; margin-top: 3px; display: block; }
+        .lead-url:hover { color: #fff; }
+        .lead-badge {
+            background: #ffffff20;
+            border: 1px solid #ffffff30;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 5px 14px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+
+        .lead-body { padding: 0; }
+        .lead-row {
+            display: flex;
+            align-items: flex-start;
+            padding: 16px 24px;
+            border-bottom: 1px solid #f0f5ff;
+            gap: 16px;
+        }
+        .lead-row:last-child { border-bottom: none; }
+        .row-num {
+            background: #1a56db;
+            color: white;
+            font-size: 11px;
+            font-weight: 800;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+        .row-content { flex: 1; }
+        .row-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #9ca3af;
+            margin-bottom: 4px;
+        }
+        .row-value { font-size: 14px; color: #1e3a8a; line-height: 1.6; font-weight: 500; }
+        .row-value.highlight { color: #1a56db; font-weight: 700; }
+
+        /* ── LOADING ── */
+        .loading { text-align: center; padding: 80px 0; display: none; }
+        .spinner {
+            width: 52px; height: 52px;
+            border: 4px solid #dbeafe;
+            border-top-color: #1a56db;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 20px;
+        }
+        .loading-text { color: #1a56db; font-size: 15px; font-weight: 600; }
+        .loading-sub { color: #9ca3af; font-size: 13px; margin-top: 6px; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        .empty { text-align: center; padding: 60px; color: #555; }
+
+        .empty { text-align: center; padding: 60px; color: #9ca3af; }
     </style>
 </head>
 <body>
+
+    <!-- HEADER -->
     <div class="header">
-        <h1>Lead Scout</h1>
-        <p>Find businesses and discover the perfect AI solution to pitch them</p>
+        <div class="header-left">
+            <div class="logo">Sway<span>trix</span></div>
+            <div class="logo-tag">Lead Scout</div>
+        </div>
+        <div class="header-right">
+            <a href="/logout" class="btn-logout">Log out</a>
+        </div>
     </div>
-    <div class="container">
-        <div class="search-card">
-            <h2>Search for Leads</h2>
-            <form method="post" action="/search" onsubmit="showLoading()">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Business Type / Niche</label>
-                        <input type="text" name="niche" placeholder="e.g. bike shops, dentists, gyms" required value="{{ request.query_params.get('niche', '') }}">
+
+    <div class="page">
+
+        <!-- SEARCH SECTION -->
+        <div class="search-section">
+            <div class="section-label">Lead Intelligence</div>
+            <div class="section-title">Find Your Next Client</div>
+            <div class="section-desc">Enter any city and Swaytrix automatically scouts 15 business categories, analyzes each business, and identifies the exact AI service they need.</div>
+            <form method="post" action="/search" id="searchForm" onsubmit="showLoading()">
+                <div class="search-form">
+                    <div class="search-input-wrap">
+                        <span class="search-icon">&#9906;</span>
+                        <input class="search-input" type="text" name="location" placeholder="e.g. Newark NJ, Miami FL, Chicago IL" required>
                     </div>
-                    <div class="form-group">
-                        <label>Location</label>
-                        <input type="text" name="location" placeholder="e.g. Austin TX, New York, London" required>
-                    </div>
-                    <div class="form-group" style="max-width: 120px;">
-                        <label>Results</label>
-                        <select name="count">
-                            <option value="5">5</option>
-                            <option value="10" selected>10</option>
-                            <option value="20">20</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Scout Leads</button>
+                    <button type="submit" class="btn-search">Scout Leads</button>
                 </div>
             </form>
+            <div class="search-hint">Searches restaurants, salons, gyms, dentists, plumbers, law firms & more — takes ~2 minutes</div>
         </div>
 
-        <div class="loading" id="loading">
+        <!-- LOADING -->
+        <div class="loading" id="loadingDiv">
             <div class="spinner"></div>
-            <p>Scouting businesses and analyzing AI opportunities...</p>
+            <div class="loading-text">Scouting businesses across 15 categories...</div>
+            <div class="loading-sub">Finding owners, contact info, and AI opportunities. Please wait.</div>
         </div>
 
         {% if leads is not none %}
+
+            <!-- STATS -->
             {% if leads %}
-                <div class="results-header">
-                    <h2>{{ leads|length }} Leads Found for "{{ query }}"</h2>
-                    <form method="post" action="/download">
-                        <input type="hidden" name="niche" value="{{ query.split(' ')[0] }}">
-                        <input type="hidden" name="location" value="{{ query.split(' ')[1:] | join(' ') }}">
-                        <button type="submit" class="btn btn-secondary">Download CSV</button>
-                    </form>
+            <div class="stats-bar">
+                <div class="stat-card">
+                    <div class="stat-num">{{ leads|length }}</div>
+                    <div class="stat-label">Leads Found</div>
                 </div>
-                {% for lead in leads %}
-                <div class="lead-card">
-                    <div class="lead-name">{{ lead.name }}</div>
-                    <a href="{{ lead.url }}" target="_blank" class="lead-url">{{ lead.url }}</a>
-                    <div class="ai-service-badge">AI Solution: {{ lead.ai_service }}</div>
-                    <div class="lead-grid">
-                        <div class="lead-field">
-                            <div class="field-label">Business Type</div>
-                            <div class="field-value">{{ lead.business_type }}</div>
-                        </div>
-                        <div class="lead-field">
-                            <div class="field-label">Pain Point</div>
-                            <div class="field-value">{{ lead.pain_point }}</div>
+                <div class="stat-card">
+                    <div class="stat-num">{{ leads|selectattr('url', 'ne', 'No website')|list|length }}</div>
+                    <div class="stat-label">Have Websites</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-num">{{ leads|selectattr('owner_name', 'ne', 'Not found')|list|length }}</div>
+                    <div class="stat-label">Owners Found</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-num">{{ leads|selectattr('contact_info', 'ne', 'Not found')|list|length }}</div>
+                    <div class="stat-label">With Contact Info</div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- RESULTS HEADER -->
+            <div class="results-header">
+                <div>
+                    <div class="results-title">Results — {{ location }}</div>
+                    <div class="results-sub">{{ leads|length }} businesses analyzed by Swaytrix AI</div>
+                </div>
+                <form method="post" action="/download">
+                    <input type="hidden" name="location" value="{{ location }}">
+                    <button type="submit" class="btn-download">&#8595; Export CSV</button>
+                </form>
+            </div>
+
+            <!-- LEAD CARDS -->
+            {% for lead in leads %}
+            <div class="lead-card">
+                <div class="lead-card-header">
+                    <div>
+                        <div class="lead-name">{{ lead.name }}</div>
+                        {% if lead.url != 'No website' %}
+                        <a href="{{ lead.url }}" target="_blank" class="lead-url">{{ lead.url }}</a>
+                        {% else %}
+                        <span class="lead-url">No website found</span>
+                        {% endif %}
+                    </div>
+                    <div class="lead-badge">{{ lead.what_they_need }}</div>
+                </div>
+                <div class="lead-body">
+                    <div class="lead-row">
+                        <div class="row-num">1</div>
+                        <div class="row-content">
+                            <div class="row-label">Business Name</div>
+                            <div class="row-value">{{ lead.name }}</div>
                         </div>
                     </div>
-                    <div class="field-label" style="margin-bottom: 8px;">Pitch Message</div>
-                    <div class="pitch-box">{{ lead.pitch }}</div>
+                    <div class="lead-row">
+                        <div class="row-num">2</div>
+                        <div class="row-content">
+                            <div class="row-label">What They Need</div>
+                            <div class="row-value highlight">{{ lead.what_they_need }}</div>
+                        </div>
+                    </div>
+                    <div class="lead-row">
+                        <div class="row-num">3</div>
+                        <div class="row-content">
+                            <div class="row-label">Why They Need It</div>
+                            <div class="row-value">{{ lead.why_they_need_it }}</div>
+                        </div>
+                    </div>
+                    <div class="lead-row">
+                        <div class="row-num">4</div>
+                        <div class="row-content">
+                            <div class="row-label">Contact & Owner</div>
+                            <div class="row-value">
+                                {% if lead.owner_name != 'Not found' %}<strong>{{ lead.owner_name }}</strong> — {% endif %}{{ lead.contact_info }}
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                {% endfor %}
-            {% else %}
-                <div class="empty">No leads found. Try a different search.</div>
+            </div>
+            {% endfor %}
+
+            {% if not leads %}
+            <div class="empty">No leads found for this location. Try a nearby city.</div>
             {% endif %}
+
         {% endif %}
+
     </div>
+
     <script>
         function showLoading() {
-            document.getElementById('loading').style.display = 'block';
+            document.getElementById('loadingDiv').style.display = 'block';
+            document.getElementById('searchForm').style.display = 'none';
         }
     </script>
 </body>
