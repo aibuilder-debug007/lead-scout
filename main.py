@@ -210,8 +210,8 @@ Business Name: {name}
 Address: {address}
 Phone: {phone}
 Google Rating: {rating or 'Not listed'}
-Website: {website or 'No website'}
-Website Content: {site_text[:4000]}
+Website: {website if website else 'None found'}
+Website Content: {site_text[:4000] if site_text else ('(site exists but could not be scraped)' if website else 'N/A — no website')}
 
 Based on what you actually see on their website and their situation, reply in EXACTLY this format:
 WHAT_THEY_NEED: [specific AI service — be precise, e.g. "AI chatbot for customer inquiries and bookings", "automated review response system", "AI-powered appointment booking", "website + AI lead capture chatbot"]
@@ -228,12 +228,35 @@ WHY_THEY_NEED_IT: [2-3 sentences — be specific and factual based on what you o
     return result
 
 
+async def find_website_via_search(business_name: str, location: str) -> str:
+    """Search Brave for a business website when Google Places doesn't return one."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            r = await h.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                params={"q": f'"{business_name}" {location} official website', "count": 5}
+            )
+            results = r.json().get("web", {}).get("results", [])
+        for res in results:
+            url = res.get("url", "")
+            if url and not any(d in url.lower() for d in BLOCKED_DOMAINS):
+                return url
+    except Exception:
+        pass
+    return ""
+
+
 async def process_business(biz: dict, location: str) -> dict:
     name = biz.get("name", "")
     website = biz.get("website", "")
     phone = biz.get("phone", "")
     address = biz.get("address", location)
     rating = biz.get("rating", "")
+
+    # If Google Places didn't return a website, try to find it via search
+    if not website and BRAVE_API_KEY:
+        website = await find_website_via_search(name, location)
 
     # Deep scrape homepage + contact + about pages
     site_text, scraped_contact = await scrape_site_deep(website)
