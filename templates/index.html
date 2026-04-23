@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lead Scout</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+        .header { background: #1a1a2e; padding: 24px 32px; border-bottom: 1px solid #2a2a4a; }
+        .header h1 { font-size: 28px; color: #7c6af7; font-weight: 700; }
+        .header p { color: #888; margin-top: 4px; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 32px; }
+        .search-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 28px; margin-bottom: 32px; }
+        .search-card h2 { font-size: 18px; margin-bottom: 20px; color: #ccc; }
+        .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; }
+        label { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        input, select { background: #111; border: 1px solid #333; color: #e0e0e0; padding: 10px 14px; border-radius: 8px; font-size: 15px; outline: none; }
+        input:focus { border-color: #7c6af7; }
+        .btn { padding: 10px 24px; border-radius: 8px; border: none; cursor: pointer; font-size: 15px; font-weight: 600; transition: all 0.2s; }
+        .btn-primary { background: #7c6af7; color: white; }
+        .btn-primary:hover { background: #6a58e0; }
+        .btn-secondary { background: #2a2a2a; color: #ccc; border: 1px solid #333; }
+        .btn-secondary:hover { background: #333; }
+        .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .results-header h2 { color: #ccc; font-size: 18px; }
+        .lead-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 24px; margin-bottom: 16px; transition: border-color 0.2s; }
+        .lead-card:hover { border-color: #7c6af7; }
+        .lead-name { font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+        .lead-url { color: #7c6af7; font-size: 13px; margin-bottom: 16px; text-decoration: none; }
+        .lead-url:hover { text-decoration: underline; }
+        .lead-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .lead-field { background: #111; border-radius: 8px; padding: 12px; }
+        .field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; margin-bottom: 4px; }
+        .field-value { font-size: 14px; color: #ddd; }
+        .ai-service-badge { display: inline-block; background: #7c6af720; border: 1px solid #7c6af750; color: #a89cf7; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+        .pitch-box { background: #111; border-left: 3px solid #7c6af7; border-radius: 0 8px 8px 0; padding: 12px 16px; font-size: 14px; color: #ccc; line-height: 1.6; }
+        .loading { text-align: center; padding: 60px; color: #666; display: none; }
+        .spinner { width: 40px; height: 40px; border: 3px solid #333; border-top-color: #7c6af7; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .empty { text-align: center; padding: 60px; color: #555; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Lead Scout</h1>
+        <p>Find businesses and discover the perfect AI solution to pitch them</p>
+    </div>
+    <div class="container">
+        <div class="search-card">
+            <h2>Search for Leads</h2>
+            <form method="post" action="/search" onsubmit="showLoading()">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Business Type / Niche</label>
+                        <input type="text" name="niche" placeholder="e.g. bike shops, dentists, gyms" required value="{{ request.query_params.get('niche', '') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Location</label>
+                        <input type="text" name="location" placeholder="e.g. Austin TX, New York, London" required>
+                    </div>
+                    <div class="form-group" style="max-width: 120px;">
+                        <label>Results</label>
+                        <select name="count">
+                            <option value="5">5</option>
+                            <option value="10" selected>10</option>
+                            <option value="20">20</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Scout Leads</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Scouting businesses and analyzing AI opportunities...</p>
+        </div>
+
+        {% if leads is not none %}
+            {% if leads %}
+                <div class="results-header">
+                    <h2>{{ leads|length }} Leads Found for "{{ query }}"</h2>
+                    <form method="post" action="/download">
+                        <input type="hidden" name="niche" value="{{ query.split(' ')[0] }}">
+                        <input type="hidden" name="location" value="{{ query.split(' ')[1:] | join(' ') }}">
+                        <button type="submit" class="btn btn-secondary">Download CSV</button>
+                    </form>
+                </div>
+                {% for lead in leads %}
+                <div class="lead-card">
+                    <div class="lead-name">{{ lead.name }}</div>
+                    <a href="{{ lead.url }}" target="_blank" class="lead-url">{{ lead.url }}</a>
+                    <div class="ai-service-badge">AI Solution: {{ lead.ai_service }}</div>
+                    <div class="lead-grid">
+                        <div class="lead-field">
+                            <div class="field-label">Business Type</div>
+                            <div class="field-value">{{ lead.business_type }}</div>
+                        </div>
+                        <div class="lead-field">
+                            <div class="field-label">Pain Point</div>
+                            <div class="field-value">{{ lead.pain_point }}</div>
+                        </div>
+                    </div>
+                    <div class="field-label" style="margin-bottom: 8px;">Pitch Message</div>
+                    <div class="pitch-box">{{ lead.pitch }}</div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty">No leads found. Try a different search.</div>
+            {% endif %}
+        {% endif %}
+    </div>
+    <script>
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
