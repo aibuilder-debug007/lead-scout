@@ -4,12 +4,16 @@ import io
 import re
 import httpx
 import asyncio
+import logging
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, Form, Request, Cookie
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import anthropic
 import secrets
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -22,8 +26,15 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 VALID_TOKENS: set[str] = set()
 
-def check_auth(session: str | None) -> bool:
-    return session in VALID_TOKENS if session else False
+BLOCKED_DOMAINS = [
+    "yelp.com", "yellowpages.com", "tripadvisor.com", "google.com", "facebook.com",
+    "bbb.org", "mapquest.com", "foursquare.com", "angieslist.com", "thumbtack.com",
+    "homeadvisor.com", "houzz.com", "bark.com", "nextdoor.com", "citysearch.com",
+    "manta.com", "superpages.com", "whitepages.com", "dexknows.com", "findlaw.com",
+    "avvo.com", "zocdoc.com", "healthgrades.com", "vitals.com", "lawyers.com",
+    "chamberofcommerce.com", "instagram.com", "twitter.com", "linkedin.com",
+    "bing.com", "yahoo.com", "wikimedia", "wikipedia.org"
+]
 
 BUSINESS_TYPES = [
     "restaurant", "hair salon", "auto repair", "gym", "dentist",
@@ -32,35 +43,8 @@ BUSINESS_TYPES = [
 ]
 
 
-async def places_search(query: str, location: str) -> list[dict]:
-    """Search Google Places for businesses and return verified data."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as h:
-            # Text search to find businesses
-            r = await h.get(
-                "https://maps.googleapis.com/maps/api/place/textsearch/json",
-                params={"query": f"{query} in {location}", "key": GOOGLE_PLACES_KEY}
-            )
-            r.raise_for_status()
-            results = r.json().get("results", [])
-
-        businesses = []
-        for place in results[:3]:
-            place_id = place.get("place_id")
-            # Get detailed info for each place
-            detail = await get_place_detail(place_id)
-            businesses.append({
-                "name": place.get("name", ""),
-                "address": place.get("formatted_address", ""),
-                "place_id": place_id,
-                "website": detail.get("website", ""),
-                "phone": detail.get("formatted_phone_number", ""),
-                "rating": place.get("rating", ""),
-                "types": place.get("types", []),
-            })
-        return businesses
-    except Exception as e:
-        return []
+def check_auth(session: str | None) -> bool:
+    return session in VALID_TOKENS if session else False
 
 
 async def get_place_detail(place_id: str) -> dict:
@@ -70,51 +54,146 @@ async def get_place_detail(place_id: str) -> dict:
                 "https://maps.googleapis.com/maps/api/place/details/json",
                 params={
                     "place_id": place_id,
-                    "fields": "website,formatted_phone_number,opening_hours",
+                    "fields": "website,formatted_phone_number,opening_hours,formatted_address",
                     "key": GOOGLE_PLACES_KEY
                 }
             )
-            r.raise_for_status()
             return r.json().get("result", {})
     except Exception:
         return {}
 
 
-async def scrape_site(url: str) -> tuple[str, str]:
-    if not url:
-        return "", ""
-    try:
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as h:
-            r = await h.get(url)
-            soup = BeautifulSoup(r.text, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer"]):
-                tag.decompose()
-            text = soup.get_text(separator=" ", strip=True)
-            emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", r.text)
-            contact = ""
-            if emails:
-                contact = "Email: " + emails[0]
-            return text[:3000], contact.strip()
-    except Exception:
-        return "", ""
+async def places_search(query: str, location: str) -> list[dict]:
+    businesses = []
 
+    # Google Places
+    if GOOGLE_PLACES_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10) as h:
+                r = await h.get(
+                    "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                    params={"query": f"{query} in {location}", "key": GOOGLE_PLACES_KEY}
+                )
+                data = r.json()
+                logger.info(f"Places status for '{query} in {location}': {data.get('status')} — {len(data.get('results', []))} results")
 
-async def find_owner(business_name: str, location: str) -> str:
+                if data.get("status") == "OK" and data.get("results"):
+                    for place in data["results"][:3]:
+                        place_id = place.get("place_id")
+                        detail = await get_place_detail(place_id)
+                        businesses.append({
+                            "name": place.get("name", ""),
+                            "address": detail.get("formatted_address") or place.get("formatted_address", location),
+                            "website": detail.get("website", ""),
+                            "phone": detail.get("formatted_phone_number", ""),
+                            "rating": str(place.get("rating", "")),
+                        })
+                    return businesses
+                else:
+                    logger.warning(f"Places API error: {data.get('status')} — {data.get('error_message', '')}")
+        except Exception as e:
+            logger.error(f"Places exception: {e}")
+
+    # Brave fallback
     try:
         async with httpx.AsyncClient(timeout=10) as h:
             r = await h.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
-                params={"q": f'"{business_name}" {location} owner OR founder OR "owned by"', "count": 3}
+                params={"q": f'"{query}" "{location}"', "count": 10}
             )
             results = r.json().get("web", {}).get("results", [])
-        snippets = " ".join(res.get("description", "") for res in results)
-        if not snippets:
+
+        loc_words = [w for w in location.lower().replace(",", "").split() if len(w) > 2]
+        for res in results:
+            url = res.get("url", "").lower()
+            if any(d in url for d in BLOCKED_DOMAINS):
+                continue
+            combined = (url + res.get("title", "") + res.get("description", "")).lower()
+            if not any(w in combined for w in loc_words):
+                continue
+            businesses.append({
+                "name": res.get("title", "").split(" - ")[0].split(" | ")[0].strip(),
+                "address": location,
+                "website": res.get("url", ""),
+                "phone": "",
+                "rating": "",
+            })
+            if len(businesses) >= 2:
+                break
+    except Exception as e:
+        logger.error(f"Brave fallback exception: {e}")
+
+    return businesses
+
+
+async def scrape_site_deep(url: str) -> tuple[str, str]:
+    """Scrape homepage + contact/about pages for maximum info."""
+    if not url:
+        return "", ""
+
+    all_text = ""
+    all_emails = []
+    all_phones = []
+
+    pages_to_try = [url, url.rstrip("/") + "/contact", url.rstrip("/") + "/about", url.rstrip("/") + "/about-us"]
+
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as h:
+        for page_url in pages_to_try:
+            try:
+                r = await h.get(page_url)
+                if r.status_code != 200:
+                    continue
+                soup = BeautifulSoup(r.text, "html.parser")
+                for tag in soup(["script", "style", "nav", "header", "footer"]):
+                    tag.decompose()
+                text = soup.get_text(separator=" ", strip=True)
+                all_text += " " + text[:2000]
+
+                emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", r.text)
+                phones = re.findall(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}", r.text)
+                all_emails.extend(emails)
+                all_phones.extend(phones)
+            except Exception:
+                continue
+
+    contact_parts = []
+    if all_emails:
+        contact_parts.append(f"Email: {all_emails[0]}")
+    if all_phones:
+        contact_parts.append(f"Phone: {all_phones[0]}")
+
+    return all_text[:5000], " | ".join(contact_parts)
+
+
+async def find_owner(business_name: str, location: str, site_text: str) -> str:
+    # First try to extract from website content
+    if site_text:
+        msg = claude.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=80,
+            messages=[{"role": "user", "content": f"Find the owner, founder, or president name from this business website text. Reply with just the full name or 'Not found'.\n\n{site_text[:3000]}"}]
+        )
+        result = msg.content[0].text.strip()
+        if result != "Not found" and len(result) < 60:
+            return result
+
+    # Fallback: search the web
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            r = await h.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                params={"q": f'"{business_name}" {location} owner OR founder OR president', "count": 4}
+            )
+            results = r.json().get("web", {}).get("results", [])
+        snippets = " ".join(res.get("description", "") + " " + res.get("title", "") for res in results)
+        if not snippets.strip():
             return "Not found"
         msg = claude.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=60,
-            messages=[{"role": "user", "content": f"Extract the owner or founder name from this text. Reply with just the name or 'Not found'.\n\n{snippets[:500]}"}]
+            max_tokens=80,
+            messages=[{"role": "user", "content": f"Extract the owner or founder name of '{business_name}' from this text. Reply with just the full name or 'Not found'.\n\n{snippets[:1000]}"}]
         )
         return msg.content[0].text.strip()
     except Exception:
@@ -122,23 +201,21 @@ async def find_owner(business_name: str, location: str) -> str:
 
 
 def analyze_lead(name: str, website: str, address: str, phone: str, rating: str, site_text: str) -> dict:
-    has_website = "yes" if website else "no"
     msg = claude.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=400,
-        messages=[{"role": "user", "content": f"""Analyze this local business as a potential AI/digital services lead.
+        max_tokens=500,
+        messages=[{"role": "user", "content": f"""You are an AI services sales analyst. Deeply analyze this local business and identify exactly what AI service would help them most.
 
-Business: {name}
+Business Name: {name}
 Address: {address}
 Phone: {phone}
-Google Rating: {rating}
-Has Website: {has_website}
-Website: {website}
-Website content: {site_text[:2000]}
+Google Rating: {rating or 'Not listed'}
+Website: {website or 'No website'}
+Website Content: {site_text[:4000]}
 
-Reply in EXACTLY this format:
-WHAT_THEY_NEED: [specific service, e.g. AI chatbot, automated booking, website build, email automation, review management]
-WHY_THEY_NEED_IT: [1-2 sentences — be specific about their gap based on rating, no website, outdated site, etc.]
+Based on what you actually see on their website and their situation, reply in EXACTLY this format:
+WHAT_THEY_NEED: [specific AI service — be precise, e.g. "AI chatbot for customer inquiries and bookings", "automated review response system", "AI-powered appointment booking", "website + AI lead capture chatbot"]
+WHY_THEY_NEED_IT: [2-3 sentences — be specific and factual based on what you observed: missing features, low rating, no online booking, outdated site, no contact form, etc.]
 """}]
     )
     text = msg.content[0].text
@@ -152,22 +229,28 @@ WHY_THEY_NEED_IT: [1-2 sentences — be specific about their gap based on rating
 
 
 async def process_business(biz: dict, location: str) -> dict:
+    name = biz.get("name", "")
     website = biz.get("website", "")
     phone = biz.get("phone", "")
-    name = biz.get("name", "")
-    address = biz.get("address", "")
-    rating = str(biz.get("rating", "No rating"))
+    address = biz.get("address", location)
+    rating = biz.get("rating", "")
 
-    site_text, email = await scrape_site(website)
-    analysis = analyze_lead(name, website, address, phone, rating, site_text)
-    owner = await find_owner(name, location)
+    # Deep scrape homepage + contact + about pages
+    site_text, scraped_contact = await scrape_site_deep(website)
+
+    # Run analysis and owner search in parallel
+    analysis_task = asyncio.get_event_loop().run_in_executor(
+        None, analyze_lead, name, website, address, phone, rating, site_text
+    )
+    owner_task = find_owner(name, location, site_text)
+    analysis, owner = await asyncio.gather(analysis_task, owner_task)
 
     contact_parts = []
     if phone:
         contact_parts.append(f"Phone: {phone}")
-    if email:
-        contact_parts.append(email)
-    if address:
+    if scraped_contact:
+        contact_parts.append(scraped_contact)
+    if address and address != location:
         contact_parts.append(f"Address: {address}")
 
     return {
@@ -188,6 +271,21 @@ async def scout_leads(location: str) -> list[dict]:
         results = await asyncio.gather(*tasks)
         all_leads.extend(results)
     return all_leads
+
+
+@app.get("/debug-places")
+async def debug_places(session: str | None = Cookie(default=None)):
+    if not check_auth(session):
+        return RedirectResponse(url="/login", status_code=303)
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            r = await h.get(
+                "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                params={"query": "restaurant in Newark NJ", "key": GOOGLE_PLACES_KEY}
+            )
+            return r.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.get("/login", response_class=HTMLResponse)
