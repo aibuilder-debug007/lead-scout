@@ -167,6 +167,49 @@ async def scrape_site_deep(url: str) -> tuple[str, str]:
     return all_text[:5000], " | ".join(contact_parts)
 
 
+async def find_owner_personal_info(owner_name: str, business_name: str) -> dict:
+    """Search for owner's LinkedIn profile and personal email via Brave."""
+    result = {"linkedin": "", "personal_email": ""}
+    if not owner_name or owner_name == "Not found" or not BRAVE_API_KEY:
+        return result
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            r = await h.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                params={"q": f'"{owner_name}" "{business_name}" site:linkedin.com/in', "count": 3}
+            )
+            for res in r.json().get("web", {}).get("results", []):
+                url = res.get("url", "")
+                if "linkedin.com/in/" in url:
+                    result["linkedin"] = url
+                    break
+    except Exception:
+        pass
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            r = await h.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                params={"q": f'"{owner_name}" "{business_name}" email', "count": 5}
+            )
+            snippets = " ".join(
+                res.get("description", "") + " " + res.get("title", "")
+                for res in r.json().get("web", {}).get("results", [])
+            )
+        emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", snippets)
+        skip = {"noreply", "no-reply", "info@", "support@", "help@", "contact@", "admin@", "hello@"}
+        personal = [e for e in emails if not any(s in e.lower() for s in skip)]
+        if personal:
+            result["personal_email"] = personal[0]
+    except Exception:
+        pass
+
+    return result
+
+
 async def find_owner(business_name: str, location: str, site_text: str) -> str:
     # First try to extract from website content
     if site_text:
@@ -353,6 +396,8 @@ async def process_business(biz: dict, location: str) -> dict:
     owner_task = find_owner(name, location, site_text)
     analysis, owner = await asyncio.gather(analysis_task, owner_task)
 
+    owner_info = await find_owner_personal_info(owner, name)
+
     contact_parts = []
     if phone:
         contact_parts.append(f"Phone: {phone}")
@@ -369,6 +414,8 @@ async def process_business(biz: dict, location: str) -> dict:
         "why_they_need_it": analysis["why_they_need_it"],
         "contact_info": " | ".join(contact_parts) if contact_parts else "Not found",
         "owner_name": owner,
+        "owner_linkedin": owner_info.get("linkedin", ""),
+        "owner_personal_email": owner_info.get("personal_email", ""),
     }
 
     lead["verification"] = await verify_lead_data(lead)
@@ -455,7 +502,7 @@ async def download(location: str = Form(...), session: str | None = Cookie(defau
     else:
         leads = await scout_leads(location)
     output = io.StringIO()
-    fieldnames = ["name", "url", "rating", "what_they_need", "why_they_need_it", "contact_info", "owner_name", "confidence", "website_verified", "phone_verified", "owner_verified", "business_verified"]
+    fieldnames = ["name", "url", "rating", "what_they_need", "why_they_need_it", "contact_info", "owner_name", "owner_linkedin", "owner_personal_email", "confidence", "website_verified", "phone_verified", "owner_verified", "business_verified"]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for lead in leads:
@@ -470,6 +517,8 @@ async def download(location: str = Form(...), session: str | None = Cookie(defau
             "why_they_need_it": lead["why_they_need_it"],
             "contact_info": lead["contact_info"],
             "owner_name": lead["owner_name"],
+            "owner_linkedin": lead.get("owner_linkedin", ""),
+            "owner_personal_email": lead.get("owner_personal_email", ""),
             "confidence": v.get("label", ""),
             "website_verified": bstr(checks.get("website")),
             "phone_verified": bstr(checks.get("phone")),
