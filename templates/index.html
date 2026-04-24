@@ -239,6 +239,23 @@
         .conf-high { background: #dcfce7; color: #166534; }
         .conf-partial { background: #fef9c3; color: #854d0e; }
         .conf-low { background: #fee2e2; color: #991b1b; }
+
+        /* ── FILTER BAR ── */
+        .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+        .filter-btn {
+            background: white;
+            border: 1.5px solid #dbeafe;
+            color: #6b7280;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .filter-btn:hover { border-color: #1a56db; color: #1a56db; }
+        .filter-btn.active { background: #1a56db; border-color: #1a56db; color: white; }
+        .lead-rating { font-size: 11px; color: #fbbf24; font-weight: 700; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -301,6 +318,10 @@
                     <div class="stat-num">{{ leads|selectattr('contact_info', 'ne', 'Not found')|list|length }}</div>
                     <div class="stat-label">With Contact Info</div>
                 </div>
+                <div class="stat-card" style="border-color:#bbf7d0;">
+                    <div class="stat-num" style="color:#16a34a;">{{ high_confidence or 0 }}</div>
+                    <div class="stat-label">High Confidence</div>
+                </div>
             </div>
             {% endif %}
 
@@ -316,9 +337,19 @@
                 </form>
             </div>
 
+            <!-- FILTER BAR -->
+            {% if leads %}
+            <div class="filter-bar">
+                <button class="filter-btn active" onclick="filterLeads('all', this)">All ({{ leads|length }})</button>
+                <button class="filter-btn" onclick="filterLeads('High Confidence', this)">High Confidence ({{ high_confidence or 0 }})</button>
+                <button class="filter-btn" onclick="filterLeads('Partial', this)">Partial</button>
+                <button class="filter-btn" onclick="filterLeads('Unverified', this)">Unverified</button>
+            </div>
+            {% endif %}
+
             <!-- LEAD CARDS -->
             {% for lead in leads %}
-            <div class="lead-card">
+            <div class="lead-card" data-confidence="{{ lead.verification.label if lead.verification else '' }}">
                 <div class="lead-card-header">
                     <div>
                         <div class="lead-name">{{ lead.name }}</div>
@@ -326,6 +357,9 @@
                         <a href="{{ lead.url }}" target="_blank" class="lead-url">{{ lead.url }}</a>
                         {% else %}
                         <span class="lead-url">No website found</span>
+                        {% endif %}
+                        {% if lead.rating %}
+                        <div class="lead-rating">&#9733; {{ lead.rating }}</div>
                         {% endif %}
                     </div>
                     <div class="lead-badge">{{ lead.what_they_need }}</div>
@@ -422,6 +456,13 @@
         function showLoading() {
             document.getElementById('loadingDiv').style.display = 'block';
             document.getElementById('searchForm').style.display = 'none';
+        }
+        function filterLeads(level, btn) {
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.querySelectorAll('.lead-card').forEach(card => {
+                card.style.display = (level === 'all' || card.dataset.confidence === level) ? '' : 'none';
+            });
         }
     </script>
 </body>

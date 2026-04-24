@@ -25,6 +25,7 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD", "leadscout123")
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 VALID_TOKENS: set[str] = set()
+RESULTS_CACHE: dict[str, dict] = {}  # session -> {location, leads}
 
 BLOCKED_DOMAINS = [
     "yelp.com", "yellowpages.com", "tripadvisor.com", "google.com", "facebook.com",
@@ -204,27 +205,34 @@ def analyze_lead(name: str, website: str, address: str, phone: str, rating: str,
     msg = claude.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=500,
-        messages=[{"role": "user", "content": f"""You are an AI services sales analyst. Deeply analyze this local business and identify exactly what AI service would help them most.
-
-Business Name: {name}
+        extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
+        system=[{
+            "type": "text",
+            "text": (
+                "You are an AI services sales analyst. Analyze local businesses and identify exactly what AI service would help them most.\n\n"
+                "Reply in EXACTLY this format:\n"
+                "WHAT_THEY_NEED: [specific AI service — e.g. 'AI chatbot for customer inquiries', 'automated review response system', 'AI appointment booking']\n"
+                "WHY_THEY_NEED_IT: [2-3 sentences — cite specific observed facts: missing features, low rating, no online booking, outdated site, no contact form, etc.]"
+            ),
+            "cache_control": {"type": "ephemeral"}
+        }],
+        messages=[{"role": "user", "content": f"""Business Name: {name}
 Address: {address}
 Phone: {phone}
 Google Rating: {rating or 'Not listed'}
 Website: {website if website else 'None found'}
-Website Content: {site_text[:4000] if site_text else ('(site exists but could not be scraped)' if website else 'N/A — no website')}
-
-Based on what you actually see on their website and their situation, reply in EXACTLY this format:
-WHAT_THEY_NEED: [specific AI service — be precise, e.g. "AI chatbot for customer inquiries and bookings", "automated review response system", "AI-powered appointment booking", "website + AI lead capture chatbot"]
-WHY_THEY_NEED_IT: [2-3 sentences — be specific and factual based on what you observed: missing features, low rating, no online booking, outdated site, no contact form, etc.]
-"""}]
+Website Content: {site_text[:4000] if site_text else ('(site exists but could not be scraped)' if website else 'N/A — no website')}"""}]
     )
     text = msg.content[0].text
     result = {"what_they_need": "", "why_they_need_it": ""}
-    for line in text.strip().split("\n"):
-        if line.startswith("WHAT_THEY_NEED:"):
-            result["what_they_need"] = line.replace("WHAT_THEY_NEED:", "").strip()
-        elif line.startswith("WHY_THEY_NEED_IT:"):
-            result["why_they_need_it"] = line.replace("WHY_THEY_NEED_IT:", "").strip()
+    what_match = re.search(r"WHAT_THEY_NEED:\s*(.+?)(?:\n|(?=WHY_THEY_NEED_IT:))", text, re.IGNORECASE)
+    why_match = re.search(r"WHY_THEY_NEED_IT:\s*(.+)", text, re.DOTALL | re.IGNORECASE)
+    if what_match:
+        result["what_they_need"] = what_match.group(1).strip()
+    if why_match:
+        result["why_they_need_it"] = why_match.group(1).strip()
+    if not result["what_they_need"] or not result["why_they_need_it"]:
+        logger.warning(f"Parse failure for {name!r}: {text[:150]}")
     return result
 
 
@@ -356,6 +364,7 @@ async def process_business(biz: dict, location: str) -> dict:
     lead = {
         "name": name,
         "url": website or "No website",
+        "rating": rating,
         "what_they_need": analysis["what_they_need"],
         "why_they_need_it": analysis["why_they_need_it"],
         "contact_info": " | ".join(contact_parts) if contact_parts else "Not found",
@@ -368,9 +377,13 @@ async def process_business(biz: dict, location: str) -> dict:
 
 async def scout_leads(location: str) -> list[dict]:
     all_leads = []
+    seen: set[str] = set()
     for biz_type in BUSINESS_TYPES:
         businesses = await places_search(biz_type, location)
-        tasks = [process_business(biz, location) for biz in businesses]
+        unique = [b for b in businesses if b["name"].lower().strip() not in seen]
+        for b in unique:
+            seen.add(b["name"].lower().strip())
+        tasks = [process_business(biz, location) for biz in unique]
         results = await asyncio.gather(*tasks)
         all_leads.extend(results)
     return all_leads
@@ -427,21 +440,46 @@ async def search(request: Request, location: str = Form(...), session: str | Non
     if not check_auth(session):
         return RedirectResponse(url="/login", status_code=303)
     leads = await scout_leads(location)
-    return templates.TemplateResponse("index.html", {"request": request, "leads": leads, "location": location})
+    RESULTS_CACHE[session] = {"location": location, "leads": leads}
+    high_confidence = sum(1 for l in leads if l.get("verification", {}).get("label") == "High Confidence")
+    return templates.TemplateResponse("index.html", {"request": request, "leads": leads, "location": location, "high_confidence": high_confidence})
 
 
 @app.post("/download")
 async def download(location: str = Form(...), session: str | None = Cookie(default=None)):
     if not check_auth(session):
         return RedirectResponse(url="/login", status_code=303)
-    leads = await scout_leads(location)
+    cached = RESULTS_CACHE.get(session)
+    if cached and cached.get("location") == location:
+        leads = cached["leads"]
+    else:
+        leads = await scout_leads(location)
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["name", "url", "what_they_need", "why_they_need_it", "contact_info", "owner_name"])
+    fieldnames = ["name", "url", "rating", "what_they_need", "why_they_need_it", "contact_info", "owner_name", "confidence", "website_verified", "phone_verified", "owner_verified", "business_verified"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
-    writer.writerows(leads)
+    for lead in leads:
+        v = lead.get("verification", {})
+        checks = v.get("checks", {})
+        def bstr(val): return "Yes" if val is True else ("No" if val is False else "N/A")
+        writer.writerow({
+            "name": lead["name"],
+            "url": lead["url"],
+            "rating": lead.get("rating", ""),
+            "what_they_need": lead["what_they_need"],
+            "why_they_need_it": lead["why_they_need_it"],
+            "contact_info": lead["contact_info"],
+            "owner_name": lead["owner_name"],
+            "confidence": v.get("label", ""),
+            "website_verified": bstr(checks.get("website")),
+            "phone_verified": bstr(checks.get("phone")),
+            "owner_verified": bstr(checks.get("owner")),
+            "business_verified": bstr(checks.get("business")),
+        })
     output.seek(0)
+    safe_loc = re.sub(r"[^\w\-]", "_", location)
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode()),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=leads_{location.replace(' ', '_')}.csv"},
+        headers={"Content-Disposition": f"attachment; filename=leads_{safe_loc}.csv"},
     )
