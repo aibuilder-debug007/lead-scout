@@ -205,6 +205,40 @@
         @keyframes spin { to { transform: rotate(360deg); } }
 
         .empty { text-align: center; padding: 60px; color: #9ca3af; }
+
+        /* ── VERIFICATION ── */
+        .verify-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            background: #f8faff;
+            border-top: 1px solid #e0eaff;
+            flex-wrap: wrap;
+        }
+        .verify-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin-right: 4px; }
+        .verify-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 20px;
+        }
+        .chip-pass { background: #dcfce7; color: #166534; }
+        .chip-fail { background: #fee2e2; color: #991b1b; }
+        .chip-skip { background: #f3f4f6; color: #9ca3af; }
+        .confidence-badge {
+            margin-left: auto;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 12px;
+            border-radius: 20px;
+        }
+        .conf-high { background: #dcfce7; color: #166534; }
+        .conf-partial { background: #fef9c3; color: #854d0e; }
+        .conf-low { background: #fee2e2; color: #991b1b; }
     </style>
 </head>
 <body>
@@ -328,6 +362,51 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- VERIFICATION BAR -->
+                {% if lead.verification %}
+                {% set v = lead.verification %}
+                {% set c = v.checks %}
+                <div class="verify-bar">
+                    <span class="verify-label">Verified:</span>
+
+                    {% if c.business is true %}
+                    <span class="verify-chip chip-pass">✓ Business Real</span>
+                    {% elif c.business is false %}
+                    <span class="verify-chip chip-fail">✗ Business Unconfirmed</span>
+                    {% else %}
+                    <span class="verify-chip chip-skip">? Business</span>
+                    {% endif %}
+
+                    {% if c.website is true %}
+                    <span class="verify-chip chip-pass">✓ Website Live</span>
+                    {% elif c.website is false %}
+                    <span class="verify-chip chip-fail">✗ Website Dead</span>
+                    {% else %}
+                    <span class="verify-chip chip-skip">— No Website</span>
+                    {% endif %}
+
+                    {% if c.phone is true %}
+                    <span class="verify-chip chip-pass">✓ Phone Confirmed</span>
+                    {% elif c.phone is false %}
+                    <span class="verify-chip chip-fail">✗ Phone Unconfirmed</span>
+                    {% else %}
+                    <span class="verify-chip chip-skip">— No Phone</span>
+                    {% endif %}
+
+                    {% if c.owner is true %}
+                    <span class="verify-chip chip-pass">✓ Owner Confirmed</span>
+                    {% elif c.owner is false %}
+                    <span class="verify-chip chip-fail">✗ Owner Unconfirmed</span>
+                    {% else %}
+                    <span class="verify-chip chip-skip">— Owner Unknown</span>
+                    {% endif %}
+
+                    <span class="confidence-badge {% if v.label == 'High Confidence' %}conf-high{% elif v.label == 'Partial' %}conf-partial{% else %}conf-low{% endif %}">
+                        {{ v.label }}
+                    </span>
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
 

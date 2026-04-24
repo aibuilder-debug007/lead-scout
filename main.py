@@ -247,6 +247,83 @@ async def find_website_via_search(business_name: str, location: str) -> str:
     return ""
 
 
+async def verify_lead_data(lead: dict) -> dict:
+    """Cross-check each lead field against live sources. Returns per-field pass/fail."""
+    checks = {"website": None, "phone": None, "owner": None, "business": None}
+
+    # 1. Website — actually loads with a real response
+    url = lead.get("url", "")
+    if url and url != "No website":
+        try:
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as h:
+                r = await h.get(url)
+                checks["website"] = r.status_code < 400
+        except Exception:
+            checks["website"] = False
+
+    # 2. Phone — Brave search confirms number is associated with this business name
+    contact = lead.get("contact_info", "")
+    phone_match = re.search(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}", contact)
+    if phone_match and BRAVE_API_KEY:
+        phone = phone_match.group()
+        try:
+            async with httpx.AsyncClient(timeout=8) as h:
+                r = await h.get(
+                    "https://api.search.brave.com/res/v1/web/search",
+                    headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                    params={"q": f'"{phone}" "{lead["name"]}"', "count": 3}
+                )
+            checks["phone"] = len(r.json().get("web", {}).get("results", [])) > 0
+        except Exception:
+            checks["phone"] = False
+
+    # 3. Owner — Brave search confirms name is tied to this business
+    owner = lead.get("owner_name", "Not found")
+    if owner and owner != "Not found" and BRAVE_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=8) as h:
+                r = await h.get(
+                    "https://api.search.brave.com/res/v1/web/search",
+                    headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                    params={"q": f'"{owner}" "{lead["name"]}"', "count": 3}
+                )
+            checks["owner"] = len(r.json().get("web", {}).get("results", [])) > 0
+        except Exception:
+            checks["owner"] = False
+
+    # 4. Business exists — Google Places confirms the business name is real
+    if GOOGLE_PLACES_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=8) as h:
+                r = await h.get(
+                    "https://maps.googleapis.com/maps/api/place/textsearch/json",
+                    params={"query": lead["name"], "key": GOOGLE_PLACES_KEY}
+                )
+            results = r.json().get("results", [])
+            if results:
+                top_name = results[0].get("name", "").lower()
+                lead_name = lead["name"].lower()
+                checks["business"] = (
+                    lead_name in top_name or top_name in lead_name
+                    or any(w in top_name for w in lead_name.split() if len(w) > 3)
+                )
+            else:
+                checks["business"] = False
+        except Exception:
+            checks["business"] = False
+
+    verified = sum(1 for v in checks.values() if v is True)
+    failed = sum(1 for v in checks.values() if v is False)
+    if verified >= 3:
+        label = "High Confidence"
+    elif verified >= 1:
+        label = "Partial"
+    else:
+        label = "Unverified"
+
+    return {"checks": checks, "score": verified, "failed": failed, "label": label}
+
+
 async def process_business(biz: dict, location: str) -> dict:
     name = biz.get("name", "")
     website = biz.get("website", "")
@@ -276,7 +353,7 @@ async def process_business(biz: dict, location: str) -> dict:
     if address and address != location:
         contact_parts.append(f"Address: {address}")
 
-    return {
+    lead = {
         "name": name,
         "url": website or "No website",
         "what_they_need": analysis["what_they_need"],
@@ -284,6 +361,9 @@ async def process_business(biz: dict, location: str) -> dict:
         "contact_info": " | ".join(contact_parts) if contact_parts else "Not found",
         "owner_name": owner,
     }
+
+    lead["verification"] = await verify_lead_data(lead)
+    return lead
 
 
 async def scout_leads(location: str) -> list[dict]:
