@@ -392,11 +392,11 @@
                             <div class="row-label">Contact & Owner</div>
                             <div class="row-value">
                                 {% if lead.owner_name != 'Not found' %}<strong>{{ lead.owner_name }}</strong> — {% endif %}{{ lead.contact_info }}
+                                {% if lead.owner_phone %}
+                                <br><span style="font-size:13px;color:#166534;font-weight:700;">&#128222; {{ lead.owner_phone }}</span>
+                                {% endif %}
                                 {% if lead.owner_linkedin %}
                                 <br><a href="{{ lead.owner_linkedin }}" target="_blank" style="color:#1a56db;font-size:12px;">&#128279; LinkedIn Profile</a>
-                                {% endif %}
-                                {% if lead.owner_personal_email %}
-                                <br><span style="font-size:12px;color:#374151;">&#9993; {{ lead.owner_personal_email }}</span>
                                 {% endif %}
                             </div>
                         </div>
