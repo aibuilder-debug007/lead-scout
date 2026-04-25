@@ -282,7 +282,7 @@
                 <div class="search-form">
                     <div class="search-input-wrap">
                         <span class="search-icon">&#9906;</span>
-                        <input class="search-input" type="text" name="location" placeholder="e.g. Newark NJ, Miami FL, Chicago IL" required>
+                        <input class="search-input" type="text" name="location" placeholder="e.g. Newark NJ, Miami FL, Chicago IL" value="{{ location or '' }}" autocomplete="off" required>
                     </div>
                     <button type="submit" class="btn-search">Scout Leads</button>
                 </div>
