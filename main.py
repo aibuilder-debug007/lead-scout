@@ -52,9 +52,14 @@ BLOCKED_DOMAINS = [
 ]
 
 BUSINESS_TYPES = [
-    "restaurant", "hair salon", "auto repair", "gym", "dentist",
-    "plumber", "real estate agent", "law firm", "pet grooming", "landscaping",
-    "electrician", "clothing store", "yoga studio", "accountant", "cleaning service"
+    # High-LTV verticals where AI booking / review recovery / website upgrades convert
+    "dentist", "chiropractor", "med spa", "physical therapy",
+    "hair salon", "nail salon", "barbershop", "spa",
+    "yoga studio", "pilates studio", "personal trainer",
+    "auto detailing", "pet grooming", "tutoring",
+    "tax preparer", "small accountant",
+    # Removed: real estate (already use CRMs), law firm (slow + regulated),
+    # plumber/electrician (too busy, blue collar), restaurant chains, big gyms
 ]
 
 
@@ -98,23 +103,50 @@ async def places_search(query: str, location: str) -> list[dict]:
                         if added >= 3:
                             break
                         name_lower = place.get("name", "").lower()
-                        review_count = place.get("user_ratings_total", 0)
-                        # Skip chains and high-volume businesses (likely corporate)
+                        review_count = place.get("user_ratings_total", 0) or 0
+                        rating = place.get("rating", 0) or 0
+
+                        # ── HARD SKIPS ────────────────────────────────
                         if any(chain in name_lower for chain in CHAIN_KEYWORDS):
-                            logger.info(f"Skipping chain: {place.get('name')}")
+                            logger.info(f"SKIP chain: {place.get('name')}")
                             continue
-                        if review_count > 300:
-                            logger.info(f"Skipping large business ({review_count} reviews): {place.get('name')}")
+                        # Already too established to need help
+                        if review_count > 100:
+                            logger.info(f"SKIP too established ({review_count} reviews): {place.get('name')}")
                             continue
+                        # Already crushing it -- no pain to solve
+                        if rating >= 4.7 and review_count >= 25:
+                            logger.info(f"SKIP already great ({rating}/{review_count}): {place.get('name')}")
+                            continue
+
                         place_id = place.get("place_id")
                         detail = await get_place_detail(place_id)
+                        website = detail.get("website", "")
+
+                        # ── WEAKNESS GATE -- must have AT LEAST ONE real signal ──
+                        weaknesses: list[str] = []
+                        if not website:
+                            weaknesses.append("No website at all")
+                        if rating and rating <= 4.2:
+                            weaknesses.append(f"Mediocre rating: {rating}")
+                        if 0 < review_count < 20:
+                            weaknesses.append(f"Low review count: only {review_count}")
+                        if not detail.get("formatted_phone_number") and not website:
+                            weaknesses.append("No phone listed on Google")
+
+                        if not weaknesses:
+                            logger.info(f"SKIP no weaknesses ({rating}/{review_count}, has site): {place.get('name')}")
+                            continue
+
+                        logger.info(f"KEEP {place.get('name')} -- weaknesses: {weaknesses}")
                         businesses.append({
                             "name": place.get("name", ""),
                             "address": detail.get("formatted_address") or place.get("formatted_address", location),
-                            "website": detail.get("website", ""),
+                            "website": website,
                             "phone": detail.get("formatted_phone_number", ""),
-                            "rating": str(place.get("rating", "")),
+                            "rating": str(rating) if rating else "",
                             "review_count": review_count,
+                            "weaknesses": weaknesses,
                         })
                         added += 1
                     return businesses
@@ -368,8 +400,10 @@ async def find_owner(business_name: str, location: str, site_text: str) -> str:
 
 
 def analyze_lead(name: str, website: str, address: str, phone: str, rating: str,
-                 review_count: int, site_text: str, pages_seen: list[str]) -> dict:
+                 review_count: int, site_text: str, pages_seen: list[str],
+                 weaknesses: list[str]) -> dict:
     pages_str = ", ".join(pages_seen) if pages_seen else "(no website scraped)"
+    signals_str = "; ".join(weaknesses) if weaknesses else "(none auto-detected)"
     msg = claude.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=600,
@@ -405,6 +439,7 @@ Google Phone: {phone or '(none)'}
 Google Rating: {rating or 'Not listed'} ({review_count or 'unknown'} reviews)
 Website: {website if website else 'NONE -- no website found'}
 PAGES CRAWLED: {pages_str}
+PRE-DETECTED WEAKNESS SIGNALS (use these as the basis of the pitch): {signals_str}
 Website Content: {site_text[:6000] if site_text else ('(failed to scrape -- treat as no evidence)' if website else 'N/A')}"""}]
     )
     text = msg.content[0].text
@@ -543,6 +578,7 @@ async def process_business(biz: dict, location: str) -> dict:
     address = biz.get("address", location)
     rating = biz.get("rating", "")
     review_count = biz.get("review_count", 0)
+    weaknesses = biz.get("weaknesses", [])
 
     # If Google Places didn't return a website, try to find it via search
     if not website and BRAVE_API_KEY:
@@ -553,7 +589,7 @@ async def process_business(biz: dict, location: str) -> dict:
 
     # Run analysis and owner search in parallel
     analysis_task = asyncio.get_event_loop().run_in_executor(
-        None, analyze_lead, name, website, address, phone, rating, review_count, site_text, pages_seen
+        None, analyze_lead, name, website, address, phone, rating, review_count, site_text, pages_seen, weaknesses
     )
     owner_task = find_owner(name, location, site_text)
     analysis, owner = await asyncio.gather(analysis_task, owner_task)
@@ -598,6 +634,7 @@ async def process_business(biz: dict, location: str) -> dict:
         "why_they_need_it": analysis["why_they_need_it"],
         "contact_info": " | ".join(contact_parts) if contact_parts else "Not found",
         "pages_crawled": pages_seen,
+        "weakness_signals": weaknesses,
         "owner_name": owner,
         "owner_linkedin": owner_info.get("linkedin", ""),
         "owner_phone": owner_info.get("owner_phone", ""),
