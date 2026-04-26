@@ -362,36 +362,38 @@
                         <div class="lead-rating">&#9733; {{ lead.rating }}</div>
                         {% endif %}
                     </div>
-                    <div class="lead-badge">{{ lead.what_they_need }}</div>
+                    <div class="lead-badge">{{ lead.what_they_need or 'Analyzing...' }}</div>
                 </div>
                 <div class="lead-body">
-                    <div class="lead-row">
-                        <div class="row-num">1</div>
+                    {% if lead.issue %}
+                    <div class="lead-row" style="background:#fff8f0;">
+                        <div class="row-num" style="background:#dc2626;">!</div>
                         <div class="row-content">
-                            <div class="row-label">Business Name</div>
-                            <div class="row-value">{{ lead.name }}</div>
+                            <div class="row-label" style="color:#dc2626;">Issue Found</div>
+                            <div class="row-value" style="color:#991b1b;font-weight:600;">{{ lead.issue }}</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="lead-row" style="background:#f0f9ff;">
+                        <div class="row-num" style="background:#0369a1;">$</div>
+                        <div class="row-content">
+                            <div class="row-label" style="color:#0369a1;">What to Sell</div>
+                            <div class="row-value highlight" style="font-size:15px;">{{ lead.what_they_need }}</div>
                         </div>
                     </div>
                     <div class="lead-row">
-                        <div class="row-num">2</div>
+                        <div class="row-num">&#128172;</div>
                         <div class="row-content">
-                            <div class="row-label">What They Need</div>
-                            <div class="row-value highlight">{{ lead.what_they_need }}</div>
-                        </div>
-                    </div>
-                    <div class="lead-row">
-                        <div class="row-num">3</div>
-                        <div class="row-content">
-                            <div class="row-label">Why They Need It</div>
+                            <div class="row-label">Your Sales Pitch</div>
                             <div class="row-value">{{ lead.why_they_need_it }}</div>
                         </div>
                     </div>
                     <div class="lead-row">
-                        <div class="row-num">4</div>
+                        <div class="row-num">&#128100;</div>
                         <div class="row-content">
-                            <div class="row-label">Contact & Owner</div>
+                            <div class="row-label">Owner & Contact</div>
                             <div class="row-value">
-                                {% if lead.owner_name != 'Not found' %}<strong>{{ lead.owner_name }}</strong> — {% endif %}{{ lead.contact_info }}
+                                {% if lead.owner_name != 'Not found' %}<strong>{{ lead.owner_name }}</strong>{% if lead.contact_info != 'Not found' %} — {% endif %}{% endif %}{{ lead.contact_info if lead.contact_info != 'Not found' else '' }}
                                 {% if lead.owner_phone %}
                                 <br><span style="font-size:13px;color:#166534;font-weight:700;">&#128222; {{ lead.owner_phone }}</span>
                                 {% endif %}

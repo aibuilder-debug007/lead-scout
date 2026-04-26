@@ -27,6 +27,20 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 VALID_TOKENS: set[str] = set()
 RESULTS_CACHE: dict[str, dict] = {}  # session -> {location, leads}
 
+CHAIN_KEYWORDS = [
+    "mcdonald", "starbucks", "subway", "dunkin", "burger king", "wendy's", "taco bell",
+    "chick-fil-a", "domino's", "pizza hut", "kfc", "popeyes", "sonic drive", "dairy queen",
+    "panera", "chipotle", "panda express", "five guys", "shake shack", "in-n-out",
+    "walmart", "target", "costco", "home depot", "lowe's", "cvs pharmacy", "walgreens",
+    "rite aid", "anytime fitness", "planet fitness", "la fitness", "gold's gym",
+    "orangetheory", "crunch fitness", "great clips", "supercuts", "sport clips",
+    "fantastic sams", "hair cuttery", "jiffy lube", "midas", "meineke", "firestone",
+    "pep boys", "autozone", "h&r block", "jackson hewitt", "7-eleven", "circle k",
+    "marriott", "hilton", "holiday inn", "best western", "sheraton", "hyatt",
+    "applebee's", "denny's", "ihop", "olive garden", "red lobster", "chili's",
+    "outback", "buffalo wild wings", "jersey mike", "jimmy john", "potbelly",
+]
+
 BLOCKED_DOMAINS = [
     "yelp.com", "yellowpages.com", "tripadvisor.com", "google.com", "facebook.com",
     "bbb.org", "mapquest.com", "foursquare.com", "angieslist.com", "thumbtack.com",
@@ -79,7 +93,19 @@ async def places_search(query: str, location: str) -> list[dict]:
                 logger.info(f"Places status for '{query} in {location}': {data.get('status')} — {len(data.get('results', []))} results")
 
                 if data.get("status") == "OK" and data.get("results"):
-                    for place in data["results"][:3]:
+                    added = 0
+                    for place in data["results"]:
+                        if added >= 3:
+                            break
+                        name_lower = place.get("name", "").lower()
+                        review_count = place.get("user_ratings_total", 0)
+                        # Skip chains and high-volume businesses (likely corporate)
+                        if any(chain in name_lower for chain in CHAIN_KEYWORDS):
+                            logger.info(f"Skipping chain: {place.get('name')}")
+                            continue
+                        if review_count > 300:
+                            logger.info(f"Skipping large business ({review_count} reviews): {place.get('name')}")
+                            continue
                         place_id = place.get("place_id")
                         detail = await get_place_detail(place_id)
                         businesses.append({
@@ -88,7 +114,9 @@ async def places_search(query: str, location: str) -> list[dict]:
                             "website": detail.get("website", ""),
                             "phone": detail.get("formatted_phone_number", ""),
                             "rating": str(place.get("rating", "")),
+                            "review_count": review_count,
                         })
+                        added += 1
                     return businesses
                 else:
                     logger.warning(f"Places API error: {data.get('status')} — {data.get('error_message', '')}")
@@ -261,37 +289,42 @@ async def find_owner(business_name: str, location: str, site_text: str) -> str:
         return "Not found"
 
 
-def analyze_lead(name: str, website: str, address: str, phone: str, rating: str, site_text: str) -> dict:
+def analyze_lead(name: str, website: str, address: str, phone: str, rating: str, review_count: int, site_text: str) -> dict:
     msg = claude.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=500,
+        max_tokens=600,
         extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
         system=[{
             "type": "text",
             "text": (
-                "You are an AI services sales analyst. Analyze local businesses and identify exactly what AI service would help them most.\n\n"
-                "Reply in EXACTLY this format:\n"
-                "WHAT_THEY_NEED: [specific AI service — e.g. 'AI chatbot for customer inquiries', 'automated review response system', 'AI appointment booking']\n"
-                "WHY_THEY_NEED_IT: [2-3 sentences — cite specific observed facts: missing features, low rating, no online booking, outdated site, no contact form, etc.]"
+                "You are a sales analyst for a small AI agency. You find SPECIFIC problems with small local businesses and pitch the exact AI service that fixes it.\n\n"
+                "Look for concrete issues like: no website, no online booking, low rating, no contact form, no live chat, outdated site, no review responses, no menu/pricing online, no social proof.\n\n"
+                "Reply in EXACTLY this format (no extra text):\n"
+                "ISSUE: [the single biggest specific problem — e.g. 'No online booking — customers must call to schedule' or 'Google rating 3.1 with 12 unanswered negative reviews' or 'No website at all']\n"
+                "SOLUTION: [the exact service to sell — short product name — e.g. 'AI Booking System', 'Review Recovery Bot', 'Starter Website + AI Chat', 'AI Lead Capture Form']\n"
+                "PITCH: [2-3 sentences: name the pain this causes them RIGHT NOW, then how your solution fixes it, then one specific outcome they'll get — be direct and dollar-focused]"
             ),
             "cache_control": {"type": "ephemeral"}
         }],
-        messages=[{"role": "user", "content": f"""Business Name: {name}
+        messages=[{"role": "user", "content": f"""Business: {name}
 Address: {address}
 Phone: {phone}
-Google Rating: {rating or 'Not listed'}
-Website: {website if website else 'None found'}
-Website Content: {site_text[:4000] if site_text else ('(site exists but could not be scraped)' if website else 'N/A — no website')}"""}]
+Google Rating: {rating or 'Not listed'} ({review_count or 'unknown'} reviews)
+Website: {website if website else 'NONE — no website found'}
+Website Content: {site_text[:4000] if site_text else ('(could not scrape)' if website else 'N/A')}"""}]
     )
     text = msg.content[0].text
-    result = {"what_they_need": "", "why_they_need_it": ""}
-    what_match = re.search(r"WHAT_THEY_NEED:\s*(.+?)(?:\n|(?=WHY_THEY_NEED_IT:))", text, re.IGNORECASE)
-    why_match = re.search(r"WHY_THEY_NEED_IT:\s*(.+)", text, re.DOTALL | re.IGNORECASE)
-    if what_match:
-        result["what_they_need"] = what_match.group(1).strip()
-    if why_match:
-        result["why_they_need_it"] = why_match.group(1).strip()
-    if not result["what_they_need"] or not result["why_they_need_it"]:
+    result = {"issue": "", "what_they_need": "", "why_they_need_it": ""}
+    issue_match = re.search(r"ISSUE:\s*(.+?)(?:\n|(?=SOLUTION:))", text, re.IGNORECASE)
+    sol_match = re.search(r"SOLUTION:\s*(.+?)(?:\n|(?=PITCH:))", text, re.IGNORECASE)
+    pitch_match = re.search(r"PITCH:\s*(.+)", text, re.DOTALL | re.IGNORECASE)
+    if issue_match:
+        result["issue"] = issue_match.group(1).strip()
+    if sol_match:
+        result["what_they_need"] = sol_match.group(1).strip()
+    if pitch_match:
+        result["why_they_need_it"] = pitch_match.group(1).strip()
+    if not result["issue"]:
         logger.warning(f"Parse failure for {name!r}: {text[:150]}")
     return result
 
@@ -398,6 +431,7 @@ async def process_business(biz: dict, location: str) -> dict:
     phone = biz.get("phone", "")
     address = biz.get("address", location)
     rating = biz.get("rating", "")
+    review_count = biz.get("review_count", 0)
 
     # If Google Places didn't return a website, try to find it via search
     if not website and BRAVE_API_KEY:
@@ -408,7 +442,7 @@ async def process_business(biz: dict, location: str) -> dict:
 
     # Run analysis and owner search in parallel
     analysis_task = asyncio.get_event_loop().run_in_executor(
-        None, analyze_lead, name, website, address, phone, rating, site_text
+        None, analyze_lead, name, website, address, phone, rating, review_count, site_text
     )
     owner_task = find_owner(name, location, site_text)
     analysis, owner = await asyncio.gather(analysis_task, owner_task)
@@ -427,6 +461,8 @@ async def process_business(biz: dict, location: str) -> dict:
         "name": name,
         "url": website or "No website",
         "rating": rating,
+        "review_count": review_count,
+        "issue": analysis["issue"],
         "what_they_need": analysis["what_they_need"],
         "why_they_need_it": analysis["why_they_need_it"],
         "contact_info": " | ".join(contact_parts) if contact_parts else "Not found",
@@ -519,7 +555,7 @@ async def download(location: str = Form(...), session: str | None = Cookie(defau
     else:
         leads = await scout_leads(location)
     output = io.StringIO()
-    fieldnames = ["name", "url", "rating", "what_they_need", "why_they_need_it", "contact_info", "owner_name", "owner_linkedin", "owner_phone", "confidence", "website_verified", "phone_verified", "owner_verified", "business_verified"]
+    fieldnames = ["name", "url", "rating", "review_count", "issue", "what_they_need", "why_they_need_it", "contact_info", "owner_name", "owner_linkedin", "owner_phone", "confidence", "website_verified", "phone_verified", "owner_verified", "business_verified"]
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for lead in leads:
@@ -530,6 +566,8 @@ async def download(location: str = Form(...), session: str | None = Cookie(defau
             "name": lead["name"],
             "url": lead["url"],
             "rating": lead.get("rating", ""),
+            "review_count": lead.get("review_count", ""),
+            "issue": lead.get("issue", ""),
             "what_they_need": lead["what_they_need"],
             "why_they_need_it": lead["why_they_need_it"],
             "contact_info": lead["contact_info"],
