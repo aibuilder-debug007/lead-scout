@@ -156,43 +156,87 @@ async def places_search(query: str, location: str) -> list[dict]:
     return businesses
 
 
-async def scrape_site_deep(url: str) -> tuple[str, str]:
-    """Scrape homepage + contact/about pages for maximum info."""
+async def scrape_site_deep(url: str) -> tuple[str, str, list[str]]:
+    """Crawl homepage + every relevant link found in the actual nav.
+    Returns (text, contact, pages_seen) so Claude knows exactly what was checked."""
     if not url:
-        return "", ""
+        return "", "", []
 
+    base = url.rstrip("/")
     all_text = ""
-    all_emails = []
-    all_phones = []
+    all_emails: set[str] = set()
+    all_phones_norm: dict[str, str] = {}   # digits -> first-seen format
+    pages_seen: list[str] = []
 
-    pages_to_try = [url, url.rstrip("/") + "/contact", url.rstrip("/") + "/about", url.rstrip("/") + "/about-us"]
+    EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+    PHONE_RE = re.compile(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}")
+    JUNK_EMAIL = ("@example.", "@email.", "@your", "@domain.", "wix.com", "wixsite",
+                  "godaddy", "sentry", "@2x", "@1x", "noreply", "no-reply",
+                  "@png", "@jpg", "u003e", "wixstatic")
 
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as h:
-        for page_url in pages_to_try:
-            try:
-                r = await h.get(page_url)
-                if r.status_code != 200:
-                    continue
-                soup = BeautifulSoup(r.text, "html.parser")
-                for tag in soup(["script", "style", "nav", "header", "footer"]):
-                    tag.decompose()
-                text = soup.get_text(separator=" ", strip=True)
-                all_text += " " + text[:2000]
+    def absorb(html: str, label: str):
+        nonlocal all_text
+        soup = BeautifulSoup(html, "html.parser")
+        # Strip ONLY script/style -- nav/header/footer often hold phone+address+hours
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
+        all_text += f"\n\n[PAGE {label}]\n{text[:2500]}"
+        for e in EMAIL_RE.findall(html):
+            if not any(j in e.lower() for j in JUNK_EMAIL):
+                all_emails.add(e)
+        for p in PHONE_RE.findall(html):
+            digits = re.sub(r"\D", "", p)
+            if len(digits) == 10 and digits not in all_phones_norm:
+                all_phones_norm[digits] = p
+        return soup
 
-                emails = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", r.text)
-                phones = re.findall(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}", r.text)
-                all_emails.extend(emails)
-                all_phones.extend(phones)
-            except Exception:
-                continue
+    PRIORITY = ("menu", "food", "drink", "reservation", "booking", "book",
+                "order", "contact", "about", "team", "service", "price",
+                "rate", "hours", "location", "appointment", "schedule")
 
-    contact_parts = []
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True,
+                                 headers={"User-Agent": "Mozilla/5.0"}) as h:
+        # 1) Homepage -- discover real nav links
+        try:
+            r = await h.get(url)
+            if r.status_code == 200:
+                pages_seen.append("/")
+                soup = absorb(r.text, "/")
+                links: set[str] = set()
+                for a in soup.find_all("a", href=True):
+                    href = a["href"].strip()
+                    if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                        continue
+                    if href.startswith("/"):
+                        links.add(href.split("?")[0].split("#")[0])
+                    elif href.lower().startswith(base.lower()):
+                        rel = href[len(base):].split("?")[0].split("#")[0]
+                        if rel: links.add(rel)
+                # Pick priority links only
+                priority_links = [
+                    l for l in links
+                    if any(kw in l.lower() for kw in PRIORITY) and len(l) < 80
+                ][:6]
+                for rel in priority_links:
+                    page_url = base + rel
+                    try:
+                        rr = await h.get(page_url)
+                        if rr.status_code == 200:
+                            pages_seen.append(rel)
+                            absorb(rr.text, rel)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    contact_parts: list[str] = []
     if all_emails:
-        contact_parts.append(f"Email: {all_emails[0]}")
-    if all_phones:
-        contact_parts.append(f"Phone: {all_phones[0]}")
+        contact_parts.append(f"Email: {sorted(all_emails)[0]}")
+    if all_phones_norm:
+        contact_parts.append(f"Phone: {next(iter(all_phones_norm.values()))}")
 
-    return all_text[:5000], " | ".join(contact_parts)
+    return all_text[:9000], " | ".join(contact_parts), pages_seen
 
 
 async def find_owner_personal_info(owner_name: str, business_name: str, location: str) -> dict:
@@ -256,40 +300,76 @@ async def find_owner_personal_info(owner_name: str, business_name: str, location
 
 
 async def find_owner(business_name: str, location: str, site_text: str) -> str:
-    # First try to extract from website content
+    """Return an owner name ONLY if it literally appears in the source text.
+    Anything else is a hallucination -- return 'Not found' instead."""
+
+    def name_present(candidate: str, source: str) -> bool:
+        """Verify that the proposed name actually exists in the source text."""
+        if not candidate or candidate.lower() == "not found":
+            return False
+        if len(candidate) > 60 or len(candidate) < 4:
+            return False
+        # Require BOTH first and last name tokens to appear in source
+        tokens = [t for t in candidate.split() if len(t) >= 2]
+        if len(tokens) < 2:
+            return False
+        return all(t.lower() in source.lower() for t in tokens[:2])
+
+    # 1) Try website text
     if site_text:
         msg = claude.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=80,
-            messages=[{"role": "user", "content": f"Find the owner, founder, or president name from this business website text. Reply with just the full name or 'Not found'.\n\n{site_text[:3000]}"}]
+            max_tokens=60,
+            messages=[{"role": "user", "content": (
+                "Extract the owner/founder/president full name from this website text. "
+                "Reply with ONLY the exact name as written in the text, or 'Not found' if no clear "
+                "owner is named. Do NOT guess. Do NOT use names that are just mentioned (e.g. customers, "
+                "staff bios) -- it must explicitly state owner/founder/president.\n\n"
+                f"{site_text[:4000]}"
+            )}]
         )
-        result = msg.content[0].text.strip()
-        if result != "Not found" and len(result) < 60:
-            return result
+        candidate = msg.content[0].text.strip().strip('"\'.,')
+        if name_present(candidate, site_text):
+            return candidate
 
-    # Fallback: search the web
-    try:
-        async with httpx.AsyncClient(timeout=10) as h:
-            r = await h.get(
-                "https://api.search.brave.com/res/v1/web/search",
-                headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
-                params={"q": f'"{business_name}" {location} owner OR founder OR president', "count": 4}
+    # 2) Brave fallback -- and the name must appear verbatim in a snippet that also references the business
+    if BRAVE_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10) as h:
+                r = await h.get(
+                    "https://api.search.brave.com/res/v1/web/search",
+                    headers={"Accept": "application/json", "X-Subscription-Token": BRAVE_API_KEY},
+                    params={"q": f'"{business_name}" {location} owner OR founder OR president', "count": 4}
+                )
+                results = r.json().get("web", {}).get("results", [])
+            snippets = " ".join(res.get("description", "") + " " + res.get("title", "") for res in results)
+            if not snippets.strip():
+                return "Not found"
+            msg = claude.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=60,
+                messages=[{"role": "user", "content": (
+                    f"Extract the owner/founder name of '{business_name}' from this text. "
+                    "Only return a name if the text explicitly attaches them as owner/founder/president "
+                    "of THIS business. Otherwise reply 'Not found'. Reply with just the name or 'Not found'.\n\n"
+                    f"{snippets[:1500]}"
+                )}]
             )
-            results = r.json().get("web", {}).get("results", [])
-        snippets = " ".join(res.get("description", "") + " " + res.get("title", "") for res in results)
-        if not snippets.strip():
-            return "Not found"
-        msg = claude.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=80,
-            messages=[{"role": "user", "content": f"Extract the owner or founder name of '{business_name}' from this text. Reply with just the full name or 'Not found'.\n\n{snippets[:1000]}"}]
-        )
-        return msg.content[0].text.strip()
-    except Exception:
-        return "Not found"
+            candidate = msg.content[0].text.strip().strip('"\'.,')
+            # Verify the name actually appears in a snippet alongside the business name
+            biz_lower = business_name.lower()
+            for res in results:
+                snippet = (res.get("description", "") + " " + res.get("title", "")).lower()
+                if biz_lower in snippet and name_present(candidate, snippet):
+                    return candidate
+        except Exception:
+            pass
+    return "Not found"
 
 
-def analyze_lead(name: str, website: str, address: str, phone: str, rating: str, review_count: int, site_text: str) -> dict:
+def analyze_lead(name: str, website: str, address: str, phone: str, rating: str,
+                 review_count: int, site_text: str, pages_seen: list[str]) -> dict:
+    pages_str = ", ".join(pages_seen) if pages_seen else "(no website scraped)"
     msg = claude.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=600,
@@ -297,33 +377,64 @@ def analyze_lead(name: str, website: str, address: str, phone: str, rating: str,
         system=[{
             "type": "text",
             "text": (
-                "You are a sales analyst for a small AI agency. You find SPECIFIC problems with small local businesses and pitch the exact AI service that fixes it.\n\n"
-                "Look for concrete issues like: no website, no online booking, low rating, no contact form, no live chat, outdated site, no review responses, no menu/pricing online, no social proof.\n\n"
-                "Reply in EXACTLY this format (no extra text):\n"
-                "ISSUE: [the single biggest specific problem — e.g. 'No online booking — customers must call to schedule' or 'Google rating 3.1 with 12 unanswered negative reviews' or 'No website at all']\n"
-                "SOLUTION: [the exact service to sell — short product name — e.g. 'AI Booking System', 'Review Recovery Bot', 'Starter Website + AI Chat', 'AI Lead Capture Form']\n"
-                "PITCH: [2-3 sentences: name the pain this causes them RIGHT NOW, then how your solution fixes it, then one specific outcome they'll get — be direct and dollar-focused]"
+                "You are a sales analyst for a small AI agency.\n\n"
+                "HARD RULES -- BREAK ANY ONE AND THE LEAD IS DISCARDED:\n"
+                "1. The ISSUE must be backed by EVIDENCE -- a direct quote from the scraped content "
+                "OR a hard fact (rating number, review count, 'no website' when website field is empty).\n"
+                "2. NEVER claim 'no menu' / 'no booking' / 'no contact form' / 'no pricing' UNLESS you can "
+                "see the relevant page was crawled and verified empty. The PAGES CRAWLED list tells you what was checked. "
+                "If the menu/booking page wasn't in the pages crawled, you do NOT have evidence for that claim -- "
+                "say 'NO CLEAR ISSUE' instead of inventing one.\n"
+                "3. If you cannot find a real, evidence-backed issue, output exactly:\n"
+                "   ISSUE: NO CLEAR ISSUE\n"
+                "   EVIDENCE: insufficient data\n"
+                "   SOLUTION: skip\n"
+                "   PITCH: skip\n"
+                "4. NEVER make up specific stats (e.g. '20-30% increase in reservations'). Use general language.\n\n"
+                "Output format (EXACT, no extra text):\n"
+                "ISSUE: [one specific problem OR 'NO CLEAR ISSUE']\n"
+                "EVIDENCE: [direct quote from content OR hard fact like 'rating 3.1 / 12 reviews']\n"
+                "SOLUTION: [short product name to sell]\n"
+                "PITCH: [2-3 sentences, dollar-focused, no fake stats]"
             ),
             "cache_control": {"type": "ephemeral"}
         }],
         messages=[{"role": "user", "content": f"""Business: {name}
 Address: {address}
-Phone: {phone}
+Google Phone: {phone or '(none)'}
 Google Rating: {rating or 'Not listed'} ({review_count or 'unknown'} reviews)
-Website: {website if website else 'NONE — no website found'}
-Website Content: {site_text[:4000] if site_text else ('(could not scrape)' if website else 'N/A')}"""}]
+Website: {website if website else 'NONE -- no website found'}
+PAGES CRAWLED: {pages_str}
+Website Content: {site_text[:6000] if site_text else ('(failed to scrape -- treat as no evidence)' if website else 'N/A')}"""}]
     )
     text = msg.content[0].text
-    result = {"issue": "", "what_they_need": "", "why_they_need_it": ""}
-    issue_match = re.search(r"ISSUE:\s*(.+?)(?:\n|(?=SOLUTION:))", text, re.IGNORECASE)
-    sol_match = re.search(r"SOLUTION:\s*(.+?)(?:\n|(?=PITCH:))", text, re.IGNORECASE)
-    pitch_match = re.search(r"PITCH:\s*(.+)", text, re.DOTALL | re.IGNORECASE)
-    if issue_match:
-        result["issue"] = issue_match.group(1).strip()
-    if sol_match:
-        result["what_they_need"] = sol_match.group(1).strip()
-    if pitch_match:
-        result["why_they_need_it"] = pitch_match.group(1).strip()
+    result = {"issue": "", "evidence": "", "what_they_need": "", "why_they_need_it": ""}
+    issue_match    = re.search(r"ISSUE:\s*(.+?)(?:\n|(?=EVIDENCE:))",      text, re.IGNORECASE)
+    evidence_match = re.search(r"EVIDENCE:\s*(.+?)(?:\n|(?=SOLUTION:))",   text, re.IGNORECASE)
+    sol_match      = re.search(r"SOLUTION:\s*(.+?)(?:\n|(?=PITCH:))",      text, re.IGNORECASE)
+    pitch_match    = re.search(r"PITCH:\s*(.+)",                           text, re.DOTALL | re.IGNORECASE)
+    if issue_match:    result["issue"]            = issue_match.group(1).strip()
+    if evidence_match: result["evidence"]         = evidence_match.group(1).strip()
+    if sol_match:      result["what_they_need"]   = sol_match.group(1).strip()
+    if pitch_match:    result["why_they_need_it"] = pitch_match.group(1).strip()
+
+    # Reject ungrounded leads: if Claude said NO CLEAR ISSUE, blank out the lead
+    issue_lower = result["issue"].lower()
+    if "no clear issue" in issue_lower or "insufficient data" in issue_lower:
+        return {"issue": "", "evidence": "", "what_they_need": "", "why_they_need_it": ""}
+
+    # If Claude claimed "no menu" but a menu page WAS crawled, that's a hallucination -- reject
+    site_lower = site_text.lower() if site_text else ""
+    crawled_menu  = any("menu" in p.lower() for p in pages_seen) or "menu" in site_lower[:3000]
+    crawled_book  = any(kw in p.lower() for p in pages_seen for kw in ["book","reservation","appointment"]) \
+                    or any(w in site_lower for w in ["reservation","book a table","book now","schedule"])
+    if "no menu" in issue_lower and crawled_menu:
+        logger.warning(f"REJECTED hallucinated 'no menu' issue for {name!r} -- menu page was crawled")
+        return {"issue": "", "evidence": "", "what_they_need": "", "why_they_need_it": ""}
+    if any(p in issue_lower for p in ["no online booking","no booking","no reservation"]) and crawled_book:
+        logger.warning(f"REJECTED hallucinated 'no booking' issue for {name!r}")
+        return {"issue": "", "evidence": "", "what_they_need": "", "why_they_need_it": ""}
+
     if not result["issue"]:
         logger.warning(f"Parse failure for {name!r}: {text[:150]}")
     return result
@@ -437,23 +548,42 @@ async def process_business(biz: dict, location: str) -> dict:
     if not website and BRAVE_API_KEY:
         website = await find_website_via_search(name, location)
 
-    # Deep scrape homepage + contact + about pages
-    site_text, scraped_contact = await scrape_site_deep(website)
+    # Deep scrape: follows real navigation links (e.g. /menu, /reservations)
+    site_text, scraped_contact, pages_seen = await scrape_site_deep(website)
 
     # Run analysis and owner search in parallel
     analysis_task = asyncio.get_event_loop().run_in_executor(
-        None, analyze_lead, name, website, address, phone, rating, review_count, site_text
+        None, analyze_lead, name, website, address, phone, rating, review_count, site_text, pages_seen
     )
     owner_task = find_owner(name, location, site_text)
     analysis, owner = await asyncio.gather(analysis_task, owner_task)
 
+    # Skip leads with no real issue -- don't show bullshit pitches
+    if not analysis["issue"]:
+        return None
+
     owner_info = await find_owner_personal_info(owner, name, location)
 
-    contact_parts = []
-    if phone:
-        contact_parts.append(f"Phone: {phone}")
+    # Build contact_info, deduping phones by digit-stripped value
+    seen_phone_digits: set[str] = set()
+    contact_parts: list[str] = []
+
+    def add_phone(p: str):
+        if not p: return
+        digits = re.sub(r"\D", "", p)
+        if len(digits) >= 10 and digits not in seen_phone_digits:
+            seen_phone_digits.add(digits)
+            contact_parts.append(f"Phone: {p}")
+
+    add_phone(phone)
     if scraped_contact:
-        contact_parts.append(scraped_contact)
+        # Walk through "Email: x | Phone: y" and add each piece, deduping phones
+        for piece in scraped_contact.split(" | "):
+            piece = piece.strip()
+            if piece.startswith("Phone:"):
+                add_phone(piece.split(":", 1)[1].strip())
+            elif piece:
+                contact_parts.append(piece)
     if address and address != location:
         contact_parts.append(f"Address: {address}")
 
@@ -463,9 +593,11 @@ async def process_business(biz: dict, location: str) -> dict:
         "rating": rating,
         "review_count": review_count,
         "issue": analysis["issue"],
+        "evidence": analysis.get("evidence", ""),
         "what_they_need": analysis["what_they_need"],
         "why_they_need_it": analysis["why_they_need_it"],
         "contact_info": " | ".join(contact_parts) if contact_parts else "Not found",
+        "pages_crawled": pages_seen,
         "owner_name": owner,
         "owner_linkedin": owner_info.get("linkedin", ""),
         "owner_phone": owner_info.get("owner_phone", ""),
@@ -485,7 +617,8 @@ async def scout_leads(location: str) -> list[dict]:
             seen.add(b["name"].lower().strip())
         tasks = [process_business(biz, location) for biz in unique]
         results = await asyncio.gather(*tasks)
-        all_leads.extend(results)
+        # Drop leads where Claude couldn't find evidence-backed issues
+        all_leads.extend([r for r in results if r is not None])
     return all_leads
 
 
